@@ -204,6 +204,12 @@ static bool_t sense_context( void )
 	return ( intnest > 0U );
 }
 
+#pragma inline_asm	set_task_stack
+static void
+set_task_stack( intptr_t stkp )
+{
+	MVTC	R1,isp
+}
 
 
 #endif /* TOPPERS_TARGET_KERNEL_H */

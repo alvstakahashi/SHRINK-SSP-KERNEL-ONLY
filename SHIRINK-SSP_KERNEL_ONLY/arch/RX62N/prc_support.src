@@ -101,10 +101,11 @@
 
 	
 	.glb	__kernel_search_schedtsk
-	.glb	__kernel_run_task
+;	.glb	__kernel_run_task
 
 	.glb	_kernel_interrupt
 	.glb	__kernel_intnest
+	.glb	_dispatch
 
 
 	.section	P, CODE
@@ -180,7 +181,7 @@ __kernel_default_int_handler_entry:
 ;  ディスパッチが要求された場合に，ディスパッチされない.
 ;
 _kernel_interrupt:
-	pushm	r14-r15						; スクラッチレジスタを退避
+	pushm	r6-r15						; スクラッチレジスタを退避
 	pushc	fpsw						; FPUステータスレジスタ退避
 	mvfacmi	r5
 	shll	#16, r5						; ACC最下位16bitは0とする
@@ -230,9 +231,9 @@ _kernel_interrupt:
 
 ;
 ;  ret_int先頭でスタックに積まれているPSWレジスタへのオフセット
-;  ACC + FPSW + R14--R15 + R1--R5 + PC
+;  ACC + FPSW + R6--R15 + R1--R5 + PC
 ;
-	RET_INT_GET_PSW_OFFSET	.equ	(8+4+28+4)
+	RET_INT_GET_PSW_OFFSET	.equ	(8+4+60+4)
 
 ret_int:
 .if	1
@@ -244,7 +245,39 @@ ret_int:
 	mov.l	#__kernel_reqflg, r5
 	mov.l	#0, [r5]					; reqflg <--- FALSE
 	bsr		__kernel_search_schedtsk	; タスクを実行
-	bsr		__kernel_run_task			; search_schedtskの返り値(R1)がそのままrun_taskの引数となる
+;	bsr		__kernel_run_task			; search_schedtskの返り値(R1)がそのままrun_taskの引数となる
+	;---------------------------------------
+	; プリエンプトされるタスクのコンテキストを修正する。
+	; R1 は新PRI
+	.glb _last_ipri
+	.glb _task_ctx
+
+
+	MOV.L	#_last_ipri,R2
+	MOV.L	[R2],R2
+	CMP		#0FFH,R2
+	BEQ		ForDISPACH					;前のタスクがない場合は何もしない
+	CMP		R1,R2						; 同じ?
+	BEQ		ForDISPACH					;同じ場合もなにもしない
+										;以下変化した場合
+	MOV.L	#preenpt,R3					;戻り番地
+	PUSH.L	R3							;interrupt_returnに戻る
+	MOV.L	#_task_ctx,R4				; コンテキストアドレス
+	MUL		#40H,R2						; ipriのオフセット
+	ADD		R2,R4						; &task_ctx[ipri]
+	MOV.L	R0,30H[R4]					; スタック書き換え
+	MOV.L	R3,38H[R4]					; PCも変更
+										;　RTSで、interrupt_returnに戻るようにする
+										; もう一度コンテキストは戻される。
+	;
+ForDISPACH:
+	;----------------------------ここまで----------------------
+	bsr		_dispatch
+
+
+preenpt:
+	clrpsw	i							; 割込み禁止(CPUロック状態)
+
 
 ;
 ;  割込み(CPU例外)へのタスクディスパッチャ出口
@@ -261,7 +294,7 @@ ret_int_r_rte:
 	mvtaclo	r5							; ACC最下位16bitは0で復帰
 	mvtachi	r4
 	popc	fpsw						; FPUステータスレジスタ復帰
-	popm	r14-r15						; レジスタ復帰
+	popm	r6-r15						; レジスタ復帰
 	popm	r1-r5
 	rte									; 割込み前の処理に戻る
 
